@@ -49,25 +49,25 @@ func (r *RedisRepository) Close() error {
 	return nil
 }
 
-// CacheMenu serializes and caches menu items for a property
-func (r *RedisRepository) CacheMenu(ctx context.Context, propertyID string, items []model.MenuItem, ttl time.Duration) error {
+// CacheMenu serializes and caches catalog items for a property
+func (r *RedisRepository) CacheMenu(ctx context.Context, propertyID string, items []model.CatalogItem, ttl time.Duration) error {
 	key := MenuCacheKeyPrefix + propertyID
 	data, err := json.Marshal(items)
 	if err != nil {
-		return fmt.Errorf("failed to marshal menu items for cache: %w", err)
+		return fmt.Errorf("failed to marshal catalog items for cache: %w", err)
 	}
 
 	err = r.Client.Set(ctx, key, data, ttl).Err()
 	if err != nil {
-		return fmt.Errorf("failed to write menu items to redis: %w", err)
+		return fmt.Errorf("failed to write catalog items to redis: %w", err)
 	}
 
-	log.Printf("Cached %d menu items for property %s in Redis (TTL: %s)", len(items), propertyID, ttl)
+	log.Printf("Cached %d catalog items for property %s in Redis (TTL: %s)", len(items), propertyID, ttl)
 	return nil
 }
 
-// GetCachedMenu retrieves and deserializes menu items for a property from Redis
-func (r *RedisRepository) GetCachedMenu(ctx context.Context, propertyID string) ([]model.MenuItem, error) {
+// GetCachedMenu retrieves and deserializes catalog items for a property from Redis
+func (r *RedisRepository) GetCachedMenu(ctx context.Context, propertyID string) ([]model.CatalogItem, error) {
 	key := MenuCacheKeyPrefix + propertyID
 	data, err := r.Client.Get(ctx, key).Bytes()
 	if err != nil {
@@ -77,16 +77,16 @@ func (r *RedisRepository) GetCachedMenu(ctx context.Context, propertyID string) 
 		return nil, fmt.Errorf("failed to read from redis: %w", err)
 	}
 
-	var items []model.MenuItem
+	var items []model.CatalogItem
 	if err := json.Unmarshal(data, &items); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal cached menu items: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal cached catalog items: %w", err)
 	}
 
 	return items, nil
 }
 
-// ClearMenuCache invalidates cached menu items for a property
-func (r *RedisRepository) ClearMenuCache(ctx context.Context, propertyID string) error {
+// InvalidateMenuCache invalidates cached catalog items for a property
+func (r *RedisRepository) InvalidateMenuCache(ctx context.Context, propertyID string) error {
 	key := MenuCacheKeyPrefix + propertyID
 	return r.Client.Del(ctx, key).Err()
 }
