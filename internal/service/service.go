@@ -202,11 +202,21 @@ func (s *HotelService) GetClientOrders(ctx context.Context, roomNumber string) (
 }
 
 func (s *HotelService) UpdateOrderStatus(ctx context.Context, orderID string, status model.OrderStatus) (*model.Order, error) {
+	order, err := s.dbRepo.GetOrder(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(order.Items) == 0 && (status == model.StatusAccepted || status == model.StatusCompleted) {
+		return nil, errors.New("cannot accept or complete an order with no items")
+	}
+
 	if err := s.dbRepo.UpdateOrderStatus(ctx, orderID, status); err != nil {
 		return nil, fmt.Errorf("failed to update status: %w", err)
 	}
 
-	order, err := s.dbRepo.GetOrder(ctx, orderID)
+	// Refetch to return the updated status
+	order, err = s.dbRepo.GetOrder(ctx, orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -226,6 +236,18 @@ func (s *HotelService) RemoveItemFromOrder(ctx context.Context, orderID string, 
 	order, err := s.dbRepo.GetOrder(ctx, orderID)
 	if err != nil {
 		return nil, err
+	}
+
+	// If no items are left in the order, mark it as cancelled (rejected) automatically
+	if len(order.Items) == 0 {
+		if err := s.dbRepo.UpdateOrderStatus(ctx, orderID, model.StatusCancelled); err != nil {
+			return nil, fmt.Errorf("failed to cancel empty order: %w", err)
+		}
+		// Refetch the order to get the updated status
+		order, err = s.dbRepo.GetOrder(ctx, orderID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := s.redisRepo.PublishOrderEvent(ctx, "order_updated", order); err != nil {
