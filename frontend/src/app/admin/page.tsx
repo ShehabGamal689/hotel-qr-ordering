@@ -55,9 +55,18 @@ const badgeColors: Record<string, string> = {
   default: 'bg-zinc-800 text-zinc-300 border-zinc-600',
 };
 
+const serviceCategories: Record<string, string[]> = {
+  fnb: ['Mains', 'Sandwiches', 'Cold Beverages', 'Appetizers', 'Salads', 'Soups', 'Desserts', 'Hot Beverages'],
+  housekeeping: ['Towels & Toiletries', 'Room Cleaning', 'Bedding'],
+  laundry: ['Dry Cleaning', 'Wash & Fold', 'Pressing'],
+  maintenance: ['Repairs', 'Plumbing', 'Electrical', 'AC & Heating'],
+  concierge: ['Valet & Transport', 'Luggage', 'Local Bookings', 'Wake-up Call'],
+};
+
 export default function AdminPage() {
   const [token, setToken] = useState<string | null>(null);
-  const [view, setView] = useState<'kanban' | 'config'>('kanban');
+  const [view, setView] = useState<'kanban' | 'config' | 'rooms'>('kanban');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   useEffect(() => {
     // Check cookie or local storage for token
@@ -68,6 +77,19 @@ export default function AdminPage() {
       setToken(authCookie.split('=')[1]);
     }
   }, []);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('theme') || 'dark';
+    setTheme(saved as 'dark' | 'light');
+    document.documentElement.classList.toggle('light', saved === 'light');
+  }, []);
+
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    localStorage.setItem('theme', newTheme);
+    document.documentElement.classList.toggle('light', newTheme === 'light');
+  };
 
   if (!token) {
     return <AuthView onLogin={(t) => setToken(t)} />;
@@ -93,20 +115,41 @@ export default function AdminPage() {
             >
               Configuration
             </button>
+            <button
+              onClick={() => setView('rooms')}
+              className={`text-sm font-medium tracking-wide uppercase ${view === 'rooms' ? 'text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              Rooms & QRs
+            </button>
           </nav>
         </div>
-        <button
-          onClick={() => {
-            document.cookie = 'admin_token=; Max-Age=0; path=/;';
-            setToken(null);
-          }}
-          className="text-xs bg-red-950/40 hover:bg-red-900/30 border border-red-500/30 text-red-400 font-medium px-3 py-1.5 rounded-lg transition-all"
-        >
-          Logout
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={toggleTheme}
+            className="text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 font-medium px-3 py-1.5 rounded-lg transition-all"
+            title="Toggle Theme"
+          >
+            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+          </button>
+          <button
+            onClick={() => {
+              document.cookie = 'admin_token=; Max-Age=0; path=/;';
+              setToken(null);
+            }}
+            className="text-xs bg-red-950/40 hover:bg-red-900/30 border border-red-500/30 text-red-400 font-medium px-3 py-1.5 rounded-lg transition-all"
+          >
+            Logout
+          </button>
+        </div>
       </header>
 
-      {view === 'kanban' ? <KanbanView token={token} /> : <ConfigView token={token} />}
+      {view === 'kanban' ? (
+        <KanbanView token={token} />
+      ) : view === 'config' ? (
+        <ConfigView token={token} />
+      ) : (
+        <RoomsView token={token} />
+      )}
     </div>
   );
 }
@@ -186,10 +229,21 @@ function ConfigView({ token }: { token: string }) {
   const [services, setServices] = useState<PropertyService[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedFilter, setSelectedFilter] = useState<string>('all');
+  const [isUploading, setIsUploading] = useState(false);
   
   // Editor modal/form state
   const [isEditing, setIsEditing] = useState(false);
   const [editingItem, setEditingItem] = useState<Partial<CatalogItem> | null>(null);
+
+  const getAvailableCategories = (serviceType: string) => {
+    const predefined = serviceCategories[serviceType] || [];
+    const existing = catalog
+      .filter(item => item.service_type === serviceType && item.attributes?.category)
+      .map(item => item.attributes?.category as string);
+    const combined = Array.from(new Set([...predefined, ...existing]));
+    return combined.sort((a, b) => a.localeCompare(b));
+  };
 
   useEffect(() => {
     async function fetchData() {
@@ -293,10 +347,14 @@ function ConfigView({ token }: { token: string }) {
     );
   }
 
+  const filteredCatalog = catalog.filter(item => 
+    selectedFilter === 'all' || item.service_type === selectedFilter
+  );
+
   return (
     <main className="flex-grow p-8 max-w-4xl mx-auto w-full pb-32">
       {/* Services List */}
-      <h2 className="text-2xl font-serif text-white mb-6">Service Modules</h2>
+      <h2 className="text-2xl font-serif text-zinc-100 mb-6">Service Modules</h2>
       <div className="bg-obsidian-900 border border-zinc-800/60 rounded-2xl p-6 mb-12">
         <p className="text-zinc-400 text-sm mb-6">Enable or disable modules for your property. Changes will instantly sync to the guest QR portal.</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -319,7 +377,7 @@ function ConfigView({ token }: { token: string }) {
 
       {/* Catalog Builder */}
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-serif text-white">Catalog Builder</h2>
+        <h2 className="text-2xl font-serif text-zinc-100">Catalog Builder</h2>
         <button 
           onClick={() => {
             setEditingItem({ name: '', description: '', price: 0, service_type: 'fnb', is_available: true, attributes: {} });
@@ -331,14 +389,31 @@ function ConfigView({ token }: { token: string }) {
         </button>
       </div>
 
+      {/* Filter Bar */}
+      <div className="flex flex-wrap gap-2 mb-6">
+        {['all', 'fnb', 'housekeeping', 'laundry', 'maintenance', 'concierge'].map(filter => (
+          <button
+            key={filter}
+            onClick={() => setSelectedFilter(filter)}
+            className={`text-xs px-3.5 py-2 rounded-xl border transition-all uppercase tracking-wider font-bold ${
+              selectedFilter === filter 
+                ? 'bg-gold-500 border-gold-500 text-obsidian-950 shadow-md shadow-gold-500/10'
+                : 'bg-obsidian-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            {filter === 'all' ? 'All' : filter === 'fnb' ? 'Food & Drink' : filter}
+          </button>
+        ))}
+      </div>
+
       <div className="bg-obsidian-900 border border-zinc-800/60 rounded-2xl p-6">
-        {catalog.length === 0 ? (
+        {filteredCatalog.length === 0 ? (
           <div className="text-center text-zinc-500 py-12">
-            <p>No catalog items found. Click 'Add New Item' to start building your services catalog.</p>
+            <p>No catalog items found for the selected filter. Click 'Add New Item' to start building your services catalog.</p>
           </div>
         ) : (
           <div className="space-y-4">
-            {catalog.map(item => (
+            {filteredCatalog.map(item => (
               <div key={item.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 bg-obsidian-950 rounded-xl border border-zinc-800/40 gap-4">
                 <div className="flex gap-4 items-start">
                   {item.attributes?.image_url ? (
@@ -352,6 +427,11 @@ function ConfigView({ token }: { token: string }) {
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border ${badgeColors[item.service_type] || badgeColors.default} uppercase tracking-wider font-bold`}>
                         {item.service_type}
                       </span>
+                      {!!item.attributes?.category && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400 border border-zinc-700/50 capitalize font-medium">
+                          {item.attributes.category as string}
+                        </span>
+                      )}
                     </div>
                     <p className="text-zinc-400 text-xs mt-1 line-clamp-1">{item.description || 'No description provided.'}</p>
                     <div className="flex items-center gap-3 mt-1.5">
@@ -391,7 +471,7 @@ function ConfigView({ token }: { token: string }) {
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-obsidian-900 border border-zinc-800/80 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in text-left">
             <header className="px-6 py-4 border-b border-zinc-800/60 flex justify-between items-center">
-              <h3 className="text-lg font-serif text-white font-semibold">
+              <h3 className="text-lg font-serif text-zinc-100 font-semibold">
                 {editingItem.id ? 'Edit Catalog Item' : 'Add New Catalog Item'}
               </h3>
               <button 
@@ -405,7 +485,7 @@ function ConfigView({ token }: { token: string }) {
               </button>
             </header>
 
-            <form onSubmit={handleSaveItem} className="p-6 space-y-4">
+            <form onSubmit={handleSaveItem} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto custom-scroll">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs text-zinc-400 uppercase tracking-wider font-bold mb-1.5">Service Type</label>
@@ -449,6 +529,63 @@ function ConfigView({ token }: { token: string }) {
               </div>
 
               <div>
+                <label className="block text-xs text-zinc-400 uppercase tracking-wider font-bold mb-1.5">Category</label>
+                <div className="space-y-2">
+                  <select 
+                    value={
+                      (() => {
+                        const currentCat = (editingItem.attributes?.category as string) || '';
+                        const available = getAvailableCategories(editingItem.service_type || 'fnb');
+                        if (currentCat === '') return '';
+                        if (currentCat === 'Other') return 'Other';
+                        if (!available.includes(currentCat)) return 'Other';
+                        return currentCat;
+                      })()
+                    }
+                    onChange={e => {
+                      const val = e.target.value;
+                      if (val === 'Other') {
+                        setEditingItem({ 
+                          ...editingItem, 
+                          attributes: { ...editingItem.attributes, category: 'Other' } 
+                        });
+                      } else {
+                        setEditingItem({ 
+                          ...editingItem, 
+                          attributes: { ...editingItem.attributes, category: val } 
+                        });
+                      }
+                    }}
+                    className="w-full bg-obsidian-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:border-gold-500 transition"
+                  >
+                    <option value="">Select Category...</option>
+                    {getAvailableCategories(editingItem.service_type || 'fnb').map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                    <option value="Other">➕ Custom Category...</option>
+                  </select>
+
+                  {((() => {
+                    const currentCat = (editingItem.attributes?.category as string) || '';
+                    const available = getAvailableCategories(editingItem.service_type || 'fnb');
+                    return currentCat === 'Other' || (currentCat !== '' && !available.includes(currentCat));
+                  })()) && (
+                    <input 
+                      type="text"
+                      required
+                      placeholder="Enter custom category name..."
+                      value={editingItem.attributes?.category === 'Other' ? '' : ((editingItem.attributes?.category as string) || '')}
+                      onChange={e => setEditingItem({ 
+                        ...editingItem, 
+                        attributes: { ...editingItem.attributes, category: e.target.value } 
+                      })}
+                      className="w-full bg-obsidian-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-gold-500 transition mt-2 animate-fade-in"
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div>
                 <label className="block text-xs text-zinc-400 uppercase tracking-wider font-bold mb-1.5">Description</label>
                 <textarea 
                   rows={3}
@@ -460,17 +597,64 @@ function ConfigView({ token }: { token: string }) {
               </div>
 
               <div>
-                <label className="block text-xs text-zinc-400 uppercase tracking-wider font-bold mb-1.5">Image URL</label>
-                <input 
-                  type="url"
-                  placeholder="https://example.com/image.jpg"
-                  value={(editingItem.attributes?.image_url as string) || ''}
-                  onChange={e => setEditingItem({ 
-                    ...editingItem, 
-                    attributes: { ...editingItem.attributes, image_url: e.target.value } 
-                  })}
-                  className="w-full bg-obsidian-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:border-gold-500 transition"
-                />
+                <label className="block text-xs text-zinc-400 uppercase tracking-wider font-bold mb-1.5">Image</label>
+                <div className="space-y-2">
+                  <input 
+                    type="url"
+                    placeholder="Enter image URL (https://...)"
+                    value={(editingItem.attributes?.image_url as string) || ''}
+                    onChange={e => setEditingItem({ 
+                      ...editingItem, 
+                      attributes: { ...editingItem.attributes, image_url: e.target.value } 
+                    })}
+                    className="w-full bg-obsidian-950 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:border-gold-500 transition"
+                  />
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="file"
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        
+                        const formData = new FormData();
+                        formData.append('image', file);
+                        
+                        setIsUploading(true);
+                        try {
+                          const res = await fetch(`${API_BASE}/api/v1/admin/catalog/upload`, {
+                            method: 'POST',
+                            headers: { 'Authorization': `Bearer ${token}` },
+                            body: formData
+                          });
+                          if (!res.ok) throw new Error('Upload failed');
+                          const data = await res.json();
+                          setEditingItem({
+                            ...editingItem,
+                            attributes: { ...editingItem.attributes, ...editingItem.attributes, image_url: data.url, category: editingItem.attributes?.category }
+                          });
+                        } catch (err) {
+                          alert('Failed to upload image. Please try again.');
+                        } finally {
+                          setIsUploading(false);
+                        }
+                      }}
+                      className="hidden"
+                      id="catalog-image-upload"
+                    />
+                    <label 
+                      htmlFor="catalog-image-upload"
+                      className="cursor-pointer bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs px-4 py-2 rounded-lg font-semibold transition-all border border-zinc-700/50 flex items-center gap-2"
+                    >
+                      📁 {isUploading ? 'Uploading...' : 'Upload Image File'}
+                    </label>
+                    {(editingItem.attributes?.image_url as string) && (
+                      <span className="text-[10px] text-zinc-550 truncate max-w-xs block mt-1">
+                        Selected: {(editingItem.attributes?.image_url as string).split('/').pop()}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
 
               <div className="flex flex-col sm:flex-row sm:items-center gap-4 pt-2">
@@ -660,7 +844,7 @@ function OrderCard({ order, onUpdateStatus, onRemoveItem }: OrderCardProps) {
     <div className={`p-5 rounded-2xl bg-obsidian-900 border ${statusBorder} transition-all flex flex-col justify-between`}>
       <div>
         <div className="flex items-center justify-between mb-3">
-          <span className="text-lg font-serif font-bold text-white">Room {order.room_number || '...'}</span>
+          <span className="text-lg font-serif font-bold text-zinc-100">Room {order.room_number || '...'}</span>
           <span className="text-xs text-zinc-550 font-medium">{timeStr}</span>
         </div>
         <div className="space-y-2 my-3">
@@ -714,6 +898,149 @@ function OrderCard({ order, onUpdateStatus, onRemoveItem }: OrderCardProps) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// --- Rooms Management View ---
+interface Room {
+  id: string;
+  property_id: string;
+  room_number: string;
+  qr_token: string;
+  created_at: string;
+}
+
+function RoomsView({ token }: { token: string }) {
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+
+  const fetchRooms = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/rooms`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRooms(data || []);
+      }
+      setRooms(prev => prev || []);
+      setLoading(false);
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchRooms();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    alert('Copied to clipboard!');
+  };
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-12 bg-obsidian-950">
+        <div className="w-8 h-8 border-2 border-gold-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex-1 p-8 bg-obsidian-950 max-w-7xl mx-auto w-full animate-fade-in">
+      <div className="flex items-center justify-between mb-8">
+        <div>
+          <h2 className="text-3xl font-serif text-zinc-100 font-bold tracking-tight">Rooms & QR Codes</h2>
+          <p className="text-sm text-zinc-400 mt-1">Manage guest rooms and download printable QR code menus.</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {rooms.map(room => (
+          <div key={room.id} className="bg-obsidian-900 border border-zinc-800/40 p-6 rounded-2xl shadow-xl flex flex-col justify-between hover:border-gold-500/20 transition-all duration-300">
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-serif text-2xl font-bold text-zinc-100">Room {room.room_number}</h3>
+                <span className="text-[10px] bg-gold-500/10 text-gold-400 border border-gold-500/20 px-2 py-0.5 rounded-full font-bold tracking-wider uppercase">Active</span>
+              </div>
+              
+              <div className="space-y-3 text-xs">
+                <div>
+                  <span className="text-zinc-500 block mb-0.5">Secure Room Token</span>
+                  <div className="flex items-center justify-between bg-obsidian-950 border border-zinc-800 px-3 py-1.5 rounded-lg font-mono text-zinc-300">
+                    <span className="truncate mr-2">{room.qr_token}</span>
+                    <button onClick={() => handleCopy(room.qr_token)} className="text-gold-400 hover:text-gold-300 active:scale-95 transition-all cursor-pointer" title="Copy Token">
+                      📋
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <span className="text-zinc-500 block mb-0.5">Created At</span>
+                  <span className="text-zinc-300 font-mono">{new Date(room.created_at).toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-zinc-800/40">
+              <button 
+                onClick={() => setSelectedRoom(room)} 
+                className="w-full bg-zinc-800 hover:bg-gold-500 hover:text-obsidian-950 text-zinc-100 font-semibold py-2.5 px-4 rounded-xl text-xs transition-all duration-200"
+              >
+                View QR Code
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {selectedRoom && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-obsidian-900 border border-zinc-800/40 p-8 rounded-2xl shadow-2xl max-w-sm w-full flex flex-col items-center relative">
+            <button 
+              onClick={() => setSelectedRoom(null)} 
+              className="absolute top-4 right-4 text-zinc-400 hover:text-zinc-100 text-lg font-bold"
+            >
+              ✕
+            </button>
+            
+            <h3 className="font-serif text-2xl font-bold text-zinc-100 mb-1">Room {selectedRoom.room_number}</h3>
+            <p className="text-xs text-zinc-500 mb-6 text-center">Scan to open the digital order menu</p>
+
+            <div className="bg-white p-4 rounded-xl mb-6 shadow-inner border border-zinc-200">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img 
+                src={`${API_BASE}/api/v1/admin/rooms/${selectedRoom.id}/qr?token=${token}`} 
+                alt={`Room ${selectedRoom.room_number} QR Code`} 
+                className="w-48 h-48"
+              />
+            </div>
+
+            <div className="w-full space-y-3">
+              <a 
+                href={`${API_BASE}/api/v1/admin/rooms/${selectedRoom.id}/qr?token=${token}`}
+                download={`room_${selectedRoom.room_number}_qr.png`}
+                target="_blank"
+                rel="noreferrer"
+                className="w-full bg-gold-500 hover:bg-gold-600 text-obsidian-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                📥 Download PNG
+              </a>
+              <button 
+                onClick={() => handleCopy(`${window.location.origin}/order?token=${selectedRoom.qr_token}`)}
+                className="w-full bg-zinc-800 hover:bg-zinc-750 text-zinc-200 font-semibold py-2.5 rounded-xl text-xs transition-all cursor-pointer"
+              >
+                🔗 Copy Order Link
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

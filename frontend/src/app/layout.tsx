@@ -30,7 +30,10 @@ export default function RootLayout({
       lang="en"
       className={`${outfit.variable} ${playfair.variable} h-full antialiased`}
     >
-      <body className="min-h-full bg-obsidian-950 text-zinc-100 font-sans flex flex-col selection:bg-gold-500 selection:text-obsidian-950">
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+      </head>
+      <body className="min-h-full bg-obsidian-950 text-zinc-100 font-sans flex flex-col selection:bg-gold-500 selection:text-obsidian-950 overflow-x-hidden">
         {children}
       </body>
     </html>
