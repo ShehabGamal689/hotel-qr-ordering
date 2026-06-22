@@ -1,8 +1,8 @@
 # --- Build Stage ---
 FROM golang:1.25-alpine AS builder
 
-# Install system dependencies (git for downloading modules if needed)
-RUN apk add --no-cache git
+# Install system dependencies (git, gcc, and musl-dev for CGO compilation)
+RUN apk add --no-cache git gcc musl-dev
 
 # Set working directory inside container
 WORKDIR /app
@@ -14,8 +14,8 @@ RUN go mod download
 # Copy the rest of the application code
 COPY . .
 
-# Compile a statically linked Go binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /hotel-server ./cmd/server/main.go
+# Compile a statically linked Go binary with CGO enabled for native resolver support
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o /hotel-server ./cmd/server/main.go
 
 # --- Final Runner Stage ---
 FROM alpine:3.20
