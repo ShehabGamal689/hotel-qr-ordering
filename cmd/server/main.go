@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 
 	"github.com/adham/hotel-qr-ordering/internal/handler"
 	"github.com/adham/hotel-qr-ordering/internal/middleware"
@@ -19,6 +21,9 @@ import (
 )
 
 func main() {
+	// Load environment variables from .env file if present
+	_ = godotenv.Load()
+
 	log.Println("Starting Hotel QR Ordering Backend...")
 
 	// 1. Load Configurations from Env with defaults
@@ -53,22 +58,71 @@ func main() {
 		}
 	}()
 
-	// 5. Initialize & Start WebSocket Hub
-	hub := handler.NewWSHub(redisRepo)
+	// 5. Initialize Storage Repository (MinIO / S3 compatible)
+	storageRepo, err := repository.NewS3StorageRepository(ctx)
+	if err != nil {
+		log.Fatalf("Fatal: Storage repository initialization failed: %v", err)
+	}
+
+	// 6. Initialize & Start WebSocket Hub
+	hub := handler.NewWSHub(redisRepo, dbRepo)
 	hub.Start(ctx)
 
-	// 6. Initialize Service Layer & Handler Layer
+	// 7. Initialize Service Layer & Handler Layer
 	srv := service.NewHotelService(dbRepo, redisRepo)
-	h := handler.NewHTTPHandler(srv, hub)
+	h := handler.NewHTTPHandler(srv, hub, storageRepo)
 
-	// 7. Setup Gin Server
+	// 8. Setup Gin Server
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
-	// CORS Middleware (Simple and clean, supporting all methods and content headers)
+	// Static routes for local fallback and QR code folder downloads
+	_ = os.MkdirAll("./public/uploads", 0755)
+	_ = os.MkdirAll("./public/qrcodes", 0755)
+	r.Static("/uploads", "./public/uploads")
+	r.Static("/qrcodes", "./public/qrcodes")
+
+	// CORS Middleware (Dynamic origin reflection with whitelist support)
 	r.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := c.Request.Header.Get("Origin")
+		allowed := false
+
+		if origin != "" {
+			// 1. Whitelist all localhosts for development
+			if strings.HasPrefix(origin, "http://localhost") || strings.HasPrefix(origin, "http://127.0.0.1") || strings.HasPrefix(origin, "https://localhost") {
+				allowed = true
+			}
+
+			// 2. Whitelist private/LAN IPs (RFC1918) for mobile/WiFi testing
+			if !allowed {
+				if strings.HasPrefix(origin, "http://192.168.") || strings.HasPrefix(origin, "http://10.") || strings.HasPrefix(origin, "http://172.") {
+					allowed = true
+				}
+			}
+
+			// 3. Whitelist production domains from environmental configs
+			if !allowed {
+				prodWhitelist := os.Getenv("ORIGIN_WHITELIST") // Comma-separated list
+				if prodWhitelist != "" {
+					domains := strings.Split(prodWhitelist, ",")
+					for _, d := range domains {
+						if strings.TrimSpace(d) == origin {
+							allowed = true
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if allowed {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			// Fallback: Default to localhost dev UI or omit to block unauthorized origins
+			c.Writer.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		}
+
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, PATCH, DELETE")
@@ -80,14 +134,14 @@ func main() {
 		c.Next()
 	})
 
-	// Redirect root & guest to Next.js Frontend Order Page
+	// Redirect root & guest to Next.js Frontend Order Page (using default seed token)
 	r.GET("/", func(c *gin.Context) {
-		c.Redirect(http.StatusFound, "http://localhost:3000/order?room=101")
+		c.Redirect(http.StatusFound, "http://localhost:3000/order?token=token_101_grand")
 	})
 
 	r.GET("/guest", func(c *gin.Context) {
-		room := c.DefaultQuery("room", "101")
-		c.Redirect(http.StatusFound, "http://localhost:3000/order?room="+room)
+		token := c.DefaultQuery("token", "token_101_grand")
+		c.Redirect(http.StatusFound, "http://localhost:3000/order?token="+token)
 	})
 
 	// Public API Routes Group
@@ -98,6 +152,7 @@ func main() {
 		api.POST("/auth/login", h.Login)
 
 		// Client
+		api.POST("/client/session/negotiate", h.NegotiateSession)
 		api.GET("/client/bootstrap", h.GetBootstrap)
 		api.GET("/client/orders", h.GetClientOrders)
 		api.POST("/orders", h.CreateOrder) // Public order placement
@@ -111,6 +166,10 @@ func main() {
 		admin.PATCH("/services/toggle", h.ToggleService)
 		admin.POST("/catalog/upload", h.UploadCatalogImage)
 		
+		admin.GET("/rooms", h.GetRooms)
+		admin.POST("/rooms/:id/rotate", h.RotateRoomToken)
+		admin.GET("/rooms/:id/qr", h.GetRoomQR)
+
 		admin.GET("/catalog", h.GetCatalogItems)
 		admin.POST("/catalog", h.CreateCatalogItem)
 		admin.PUT("/catalog/:id", h.UpdateCatalogItem)
