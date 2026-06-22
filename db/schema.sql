@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS catalog_items (
 CREATE TABLE IF NOT EXISTS orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     room_id UUID NOT NULL REFERENCES rooms(id) ON DELETE RESTRICT,
+    qr_token VARCHAR(255) DEFAULT '',
+    group_id VARCHAR(255) DEFAULT '',
     status VARCHAR(50) NOT NULL DEFAULT 'pending', -- pending, accepted, completed, cancelled
     total_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -60,6 +62,23 @@ CREATE TABLE IF NOT EXISTS order_items (
 );
 
 -- Indexes for performance
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS qr_token VARCHAR(255) DEFAULT '';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS group_id VARCHAR(255) DEFAULT '';
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS session_id UUID DEFAULT NULL;
+
+CREATE TABLE IF NOT EXISTS guest_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    room_id UUID NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    session_token VARCHAR(255) UNIQUE NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'active', -- active, archived
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_token ON guest_sessions(session_token);
+CREATE INDEX IF NOT EXISTS idx_guest_sessions_room_id ON guest_sessions(room_id);
+CREATE INDEX IF NOT EXISTS idx_orders_session_id ON orders(session_id);
+
 CREATE INDEX IF NOT EXISTS idx_users_property_id ON users(property_id);
 CREATE INDEX IF NOT EXISTS idx_property_services_property_id ON property_services(property_id);
 CREATE INDEX IF NOT EXISTS idx_rooms_property_id ON rooms(property_id);
@@ -67,3 +86,4 @@ CREATE INDEX IF NOT EXISTS idx_catalog_items_property_id ON catalog_items(proper
 CREATE INDEX IF NOT EXISTS idx_catalog_items_service_type ON catalog_items(service_type);
 CREATE INDEX IF NOT EXISTS idx_orders_room_id ON orders(room_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_orders_qr_token ON orders(qr_token);
