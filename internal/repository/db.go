@@ -185,6 +185,37 @@ func (r *PostgresRepository) GetRoomByToken(ctx context.Context, token string) (
 	return &rm, nil
 }
 
+func (r *PostgresRepository) GetRoomsByProperty(ctx context.Context, propertyID string) ([]model.Room, error) {
+	query := `SELECT id, property_id, room_number, qr_token, created_at FROM rooms WHERE property_id = $1 ORDER BY room_number`
+	rows, err := r.Pool.Query(ctx, query, propertyID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var rooms []model.Room
+	for rows.Next() {
+		var rm model.Room
+		if err := rows.Scan(&rm.ID, &rm.PropertyID, &rm.RoomNumber, &rm.QRToken, &rm.CreatedAt); err != nil {
+			return nil, err
+		}
+		rooms = append(rooms, rm)
+	}
+	return rooms, nil
+}
+
+func (r *PostgresRepository) UpdateRoomQRToken(ctx context.Context, roomID string, propertyID string, newToken string) error {
+	query := `UPDATE rooms SET qr_token = $1 WHERE id = $2 AND property_id = $3`
+	tag, err := r.Pool.Exec(ctx, query, newToken, roomID, propertyID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("room %s not found for this property", roomID)
+	}
+	return nil
+}
+
 func (r *PostgresRepository) GetCatalogItems(ctx context.Context, propertyID string) ([]model.CatalogItem, error) {
 	query := `SELECT id, property_id, service_type, name, description, price, is_available, attributes, created_at 
 	          FROM catalog_items WHERE property_id = $1 ORDER BY service_type, name`
@@ -273,8 +304,13 @@ func (r *PostgresRepository) CreateOrder(ctx context.Context, order *model.Order
 	order.CreatedAt = time.Now()
 	order.Status = model.StatusPending
 
-	orderQuery := `INSERT INTO orders (id, room_id, status, total_amount, created_at) VALUES ($1, $2, $3, $4, $5)`
-	_, err = tx.Exec(ctx, orderQuery, order.ID, order.RoomID, order.Status, order.TotalAmount, order.CreatedAt)
+	var sessionIDVal *string
+	if order.SessionID != "" {
+		sessionIDVal = &order.SessionID
+	}
+
+	orderQuery := `INSERT INTO orders (id, room_id, qr_token, session_id, group_id, status, total_amount, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+	_, err = tx.Exec(ctx, orderQuery, order.ID, order.RoomID, order.QRToken, sessionIDVal, order.GroupID, order.Status, order.TotalAmount, order.CreatedAt)
 	if err != nil {
 		return err
 	}
@@ -296,7 +332,7 @@ func (r *PostgresRepository) CreateOrder(ctx context.Context, order *model.Order
 
 func (r *PostgresRepository) GetOrdersByProperty(ctx context.Context, propertyID string) ([]model.Order, error) {
 	orderQuery := `
-		SELECT o.id, o.room_id, r.room_number, o.status, o.total_amount, o.created_at 
+		SELECT o.id, o.room_id, r.room_number, r.property_id, o.qr_token, COALESCE(o.session_id::text, ''), o.group_id, o.status, o.total_amount, o.created_at 
 		FROM orders o
 		JOIN rooms r ON o.room_id = r.id
 		WHERE r.property_id = $1
@@ -311,7 +347,7 @@ func (r *PostgresRepository) GetOrdersByProperty(ctx context.Context, propertyID
 	var orders []model.Order
 	for rows.Next() {
 		var o model.Order
-		if err := rows.Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.Status, &o.TotalAmount, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.PropertyID, &o.QRToken, &o.SessionID, &o.GroupID, &o.Status, &o.TotalAmount, &o.CreatedAt); err != nil {
 			return nil, err
 		}
 		orders = append(orders, o)
@@ -328,15 +364,15 @@ func (r *PostgresRepository) GetOrdersByProperty(ctx context.Context, propertyID
 	return orders, nil
 }
 
-func (r *PostgresRepository) GetActiveOrdersByRoom(ctx context.Context, roomNumber string) ([]model.Order, error) {
+func (r *PostgresRepository) GetActiveOrdersByRoomToken(ctx context.Context, qrToken string) ([]model.Order, error) {
 	orderQuery := `
-		SELECT o.id, o.room_id, r.room_number, o.status, o.total_amount, o.created_at 
+		SELECT o.id, o.room_id, r.room_number, r.property_id, o.qr_token, COALESCE(o.session_id::text, ''), o.group_id, o.status, o.total_amount, o.created_at 
 		FROM orders o
 		JOIN rooms r ON o.room_id = r.id
-		WHERE r.room_number = $1 AND o.status IN ('pending', 'accepted')
+		WHERE o.qr_token = $1 AND o.status IN ('pending', 'accepted')
 		ORDER BY o.created_at DESC`
 	
-	rows, err := r.Pool.Query(ctx, orderQuery, roomNumber)
+	rows, err := r.Pool.Query(ctx, orderQuery, qrToken)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +381,41 @@ func (r *PostgresRepository) GetActiveOrdersByRoom(ctx context.Context, roomNumb
 	var orders []model.Order
 	for rows.Next() {
 		var o model.Order
-		if err := rows.Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.Status, &o.TotalAmount, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.PropertyID, &o.QRToken, &o.SessionID, &o.GroupID, &o.Status, &o.TotalAmount, &o.CreatedAt); err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+
+	for i := range orders {
+		items, err := r.getOrderItems(ctx, orders[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		orders[i].Items = items
+	}
+
+	return orders, nil
+}
+
+func (r *PostgresRepository) GetOrdersByRoomToken(ctx context.Context, qrToken string) ([]model.Order, error) {
+	orderQuery := `
+		SELECT o.id, o.room_id, r.room_number, r.property_id, o.qr_token, COALESCE(o.session_id::text, ''), o.group_id, o.status, o.total_amount, o.created_at 
+		FROM orders o
+		JOIN rooms r ON o.room_id = r.id
+		WHERE o.qr_token = $1
+		ORDER BY o.created_at DESC`
+	
+	rows, err := r.Pool.Query(ctx, orderQuery, qrToken)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []model.Order
+	for rows.Next() {
+		var o model.Order
+		if err := rows.Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.PropertyID, &o.QRToken, &o.SessionID, &o.GroupID, &o.Status, &o.TotalAmount, &o.CreatedAt); err != nil {
 			return nil, err
 		}
 		orders = append(orders, o)
@@ -364,13 +434,13 @@ func (r *PostgresRepository) GetActiveOrdersByRoom(ctx context.Context, roomNumb
 
 func (r *PostgresRepository) GetOrder(ctx context.Context, orderID string) (*model.Order, error) {
 	query := `
-		SELECT o.id, o.room_id, r.room_number, o.status, o.total_amount, o.created_at 
+		SELECT o.id, o.room_id, r.room_number, r.property_id, o.qr_token, COALESCE(o.session_id::text, ''), o.group_id, o.status, o.total_amount, o.created_at 
 		FROM orders o
 		JOIN rooms r ON o.room_id = r.id
 		WHERE o.id = $1`
 	
 	var o model.Order
-	err := r.Pool.QueryRow(ctx, query, orderID).Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.Status, &o.TotalAmount, &o.CreatedAt)
+	err := r.Pool.QueryRow(ctx, query, orderID).Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.PropertyID, &o.QRToken, &o.SessionID, &o.GroupID, &o.Status, &o.TotalAmount, &o.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -383,6 +453,138 @@ func (r *PostgresRepository) GetOrder(ctx context.Context, orderID string) (*mod
 
 	return &o, nil
 }
+
+// --- Guest Session Management Methods ---
+
+func (r *PostgresRepository) GetRoomByID(ctx context.Context, id string) (*model.Room, error) {
+	query := `SELECT id, property_id, room_number, qr_token, created_at FROM rooms WHERE id = $1`
+	var rm model.Room
+	err := r.Pool.QueryRow(ctx, query, id).Scan(&rm.ID, &rm.PropertyID, &rm.RoomNumber, &rm.QRToken, &rm.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &rm, nil
+}
+
+func (r *PostgresRepository) CreateGuestSession(ctx context.Context, roomID, token string, expiresAt time.Time) (*model.GuestSession, error) {
+	query := `
+		INSERT INTO guest_sessions (id, room_id, session_token, status, expires_at)
+		VALUES ($1, $2, $3, 'active', $4)
+		RETURNING id, status, created_at`
+	
+	id := uuid.New().String()
+	var s model.GuestSession
+	s.ID = id
+	s.RoomID = roomID
+	s.SessionToken = token
+	s.ExpiresAt = expiresAt
+	
+	err := r.Pool.QueryRow(ctx, query, id, roomID, token, expiresAt).Scan(&s.ID, &s.Status, &s.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (r *PostgresRepository) GetGuestSessionByToken(ctx context.Context, token string) (*model.GuestSession, error) {
+	query := `
+		SELECT id, room_id, session_token, status, created_at, expires_at 
+		FROM guest_sessions 
+		WHERE session_token = $1`
+	var s model.GuestSession
+	err := r.Pool.QueryRow(ctx, query, token).Scan(&s.ID, &s.RoomID, &s.SessionToken, &s.Status, &s.CreatedAt, &s.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+func (r *PostgresRepository) InvalidateAllGuestSessionsForRoom(ctx context.Context, roomID string) error {
+	query := `UPDATE guest_sessions SET status = 'archived' WHERE room_id = $1 AND status = 'active'`
+	_, err := r.Pool.Exec(ctx, query, roomID)
+	return err
+}
+
+func (r *PostgresRepository) ExtendGuestSession(ctx context.Context, sessionID string, newExpiresAt time.Time) error {
+	query := `UPDATE guest_sessions SET status = 'active', expires_at = $1 WHERE id = $2`
+	_, err := r.Pool.Exec(ctx, query, newExpiresAt, sessionID)
+	return err
+}
+
+func (r *PostgresRepository) UpdateGuestSessionStatus(ctx context.Context, sessionID string, status string) error {
+	query := `UPDATE guest_sessions SET status = $1 WHERE id = $2`
+	_, err := r.Pool.Exec(ctx, query, status, sessionID)
+	return err
+}
+
+func (r *PostgresRepository) GetActiveOrdersBySessionID(ctx context.Context, sessionID string) ([]model.Order, error) {
+	orderQuery := `
+		SELECT o.id, o.room_id, r.room_number, r.property_id, o.qr_token, COALESCE(o.session_id::text, ''), o.group_id, o.status, o.total_amount, o.created_at 
+		FROM orders o
+		JOIN rooms r ON o.room_id = r.id
+		WHERE o.session_id = $1 AND o.status IN ('pending', 'accepted')
+		ORDER BY o.created_at DESC`
+	
+	rows, err := r.Pool.Query(ctx, orderQuery, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []model.Order
+	for rows.Next() {
+		var o model.Order
+		if err := rows.Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.PropertyID, &o.QRToken, &o.SessionID, &o.GroupID, &o.Status, &o.TotalAmount, &o.CreatedAt); err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+
+	for i := range orders {
+		items, err := r.getOrderItems(ctx, orders[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		orders[i].Items = items
+	}
+
+	return orders, nil
+}
+
+func (r *PostgresRepository) GetOrdersBySessionID(ctx context.Context, sessionID string) ([]model.Order, error) {
+	orderQuery := `
+		SELECT o.id, o.room_id, r.room_number, r.property_id, o.qr_token, COALESCE(o.session_id::text, ''), o.group_id, o.status, o.total_amount, o.created_at 
+		FROM orders o
+		JOIN rooms r ON o.room_id = r.id
+		WHERE o.session_id = $1
+		ORDER BY o.created_at DESC`
+	
+	rows, err := r.Pool.Query(ctx, orderQuery, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []model.Order
+	for rows.Next() {
+		var o model.Order
+		if err := rows.Scan(&o.ID, &o.RoomID, &o.RoomNumber, &o.PropertyID, &o.QRToken, &o.SessionID, &o.GroupID, &o.Status, &o.TotalAmount, &o.CreatedAt); err != nil {
+			return nil, err
+		}
+		orders = append(orders, o)
+	}
+
+	for i := range orders {
+		items, err := r.getOrderItems(ctx, orders[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		orders[i].Items = items
+	}
+
+	return orders, nil
+}
+
 
 func (r *PostgresRepository) UpdateOrderStatus(ctx context.Context, orderID string, status model.OrderStatus) error {
 	query := `UPDATE orders SET status = $1 WHERE id = $2`

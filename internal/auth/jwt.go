@@ -2,12 +2,21 @@ package auth
 
 import (
 	"errors"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
-var JWTSecret = []byte("super_secret_jwt_key_for_hotel_saas_dev") // In production, load from ENV
+var JWTSecret = getJWTSecret()
+
+func getJWTSecret() []byte {
+	secret := os.Getenv("JWT_SECRET")
+	if secret != "" {
+		return []byte(secret)
+	}
+	return []byte("super_secret_jwt_key_for_hotel_saas_dev")
+}
 
 type Claims struct {
 	UserID     string `json:"user_id"`

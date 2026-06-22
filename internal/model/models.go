@@ -61,11 +61,35 @@ type CatalogItem struct {
 	CreatedAt   time.Time              `json:"created_at"`
 }
 
+// GuestSession represents an active or archived stay session for a room
+type GuestSession struct {
+	ID           string    `json:"id"`
+	RoomID       string    `json:"room_id"`
+	SessionToken string    `json:"session_token"`
+	Status       string    `json:"status"` // active, archived
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+type NegotiateSessionRequest struct {
+	RoomStaticToken string `json:"room_static_token" binding:"required"`
+	OldGuestToken   string `json:"old_guest_token,omitempty"`
+}
+
+type NegotiateSessionResponse struct {
+	SessionToken string `json:"session_token"`
+	Status       string `json:"status"` // active, archived
+}
+
 // Order represents an order placed by a guest in a room
 type Order struct {
 	ID          string      `json:"id"`
 	RoomID      string      `json:"room_id"`
 	RoomNumber  string      `json:"room_number"` // Loaded dynamically
+	PropertyID  string      `json:"property_id,omitempty"` // Loaded dynamically
+	QRToken     string      `json:"qr_token,omitempty"`
+	SessionID   string      `json:"session_id,omitempty"`
+	GroupID     string      `json:"group_id,omitempty"`
 	Status      OrderStatus `json:"status"`
 	TotalAmount float64     `json:"total_amount"`
 	CreatedAt   time.Time   `json:"created_at"`
@@ -99,8 +123,9 @@ type OrderItemRequest struct {
 }
 
 type OrderRequest struct {
-	RoomNumber string             `json:"room_number" binding:"required"`
-	Items      []OrderItemRequest `json:"items" binding:"required,dive"`
+	RoomToken string             `json:"room_token" binding:"required"`
+	GroupID   string             `json:"group_id,omitempty"`
+	Items     []OrderItemRequest `json:"items" binding:"required,dive"`
 }
 
 type StatusUpdateRequest struct {
@@ -115,9 +140,11 @@ type ToggleServiceRequest struct {
 
 // BootstrapResponse used by the guest portal to render UI
 type BootstrapResponse struct {
-	Property Property          `json:"property"`
-	Services []PropertyService `json:"services"`
-	Catalog  []CatalogItem     `json:"catalog"`
+	Property   Property          `json:"property"`
+	Services   []PropertyService `json:"services"`
+	Catalog    []CatalogItem     `json:"catalog"`
+	RoomNumber string            `json:"room_number,omitempty"`
+	IsExpired  bool              `json:"is_expired"`
 }
 
 // WSEvent represents the payload broadcast over WebSockets

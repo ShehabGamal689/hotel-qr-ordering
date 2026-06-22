@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/adham/hotel-qr-ordering/internal/auth"
@@ -84,16 +86,71 @@ func (s *HotelService) ToggleService(ctx context.Context, propID, srvType string
 
 // --- Client Bootstrap & Catalog ---
 
-func (s *HotelService) GetClientBootstrap(ctx context.Context, roomNumber string) (*model.BootstrapResponse, *model.Room, error) {
-	room, err := s.dbRepo.GetRoomByNumber(ctx, roomNumber)
+// --- Guest Stay Session Negotiation ---
+
+func (s *HotelService) NegotiateGuestSession(ctx context.Context, roomStaticToken, oldGuestToken string) (string, error) {
+	room, err := s.dbRepo.GetRoomByToken(ctx, roomStaticToken)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid room number: %w", err)
+		return "", fmt.Errorf("invalid room static token: %w", err)
+	}
+
+	if oldGuestToken != "" {
+		session, err := s.dbRepo.GetGuestSessionByToken(ctx, oldGuestToken)
+		if err == nil && session.RoomID == room.ID {
+			switch session.Status {
+			case "active":
+				// Extend the session's sliding inactivity window (12 hours)
+				newExpiry := time.Now().Add(12 * time.Hour)
+				_ = s.dbRepo.ExtendGuestSession(ctx, session.ID, newExpiry)
+				return oldGuestToken, nil
+			case "archived":
+				// Allow returning the archived session token for read-only history if it expired/was archived recently (within 48 hours)
+				if time.Now().Before(session.ExpiresAt.Add(48 * time.Hour)) {
+					return oldGuestToken, nil
+				}
+			}
+		}
+	}
+
+	// If no valid active session or it was archived/not found, start a new stay
+	// 1. Invalidate all previous active sessions for this room
+	_ = s.dbRepo.InvalidateAllGuestSessionsForRoom(ctx, room.ID)
+
+	// 2. Generate a new stay token
+	newToken := uuid.New().String()
+	expiresAt := time.Now().Add(12 * time.Hour)
+
+	_, err = s.dbRepo.CreateGuestSession(ctx, room.ID, newToken, expiresAt)
+	if err != nil {
+		return "", fmt.Errorf("failed to create guest session: %w", err)
+	}
+
+	return newToken, nil
+}
+
+// --- Client Bootstrap & Catalog ---
+
+func (s *HotelService) GetClientBootstrap(ctx context.Context, sessionToken string) (*model.BootstrapResponse, *model.Room, error) {
+	session, err := s.dbRepo.GetGuestSessionByToken(ctx, sessionToken)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid guest session: %w", err)
+	}
+
+	isExpired := false
+	if session.Status != "active" || time.Now().After(session.ExpiresAt) {
+		isExpired = true
+	} else {
+		// Refresh sliding window on successful bootstrap activity (12 hours)
+		_ = s.dbRepo.ExtendGuestSession(ctx, session.ID, time.Now().Add(12*time.Hour))
+	}
+
+	room, err := s.dbRepo.GetRoomByID(ctx, session.RoomID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load room: %w", err)
 	}
 
 	propID := room.PropertyID
 
-	// NOTE: We could cache the entire BootstrapResponse in Redis instead of just the menu.
-	// For now, we fetch from DB.
 	prop, err := s.dbRepo.GetProperty(ctx, propID)
 	if err != nil {
 		return nil, nil, err
@@ -125,9 +182,11 @@ func (s *HotelService) GetClientBootstrap(ctx context.Context, roomNumber string
 	}
 
 	res := &model.BootstrapResponse{
-		Property: *prop,
-		Services: services,
-		Catalog:  filteredCatalog,
+		Property:   *prop,
+		Services:   services,
+		Catalog:    filteredCatalog,
+		RoomNumber: room.RoomNumber,
+		IsExpired:  isExpired,
 	}
 
 	return res, room, nil
@@ -140,9 +199,33 @@ func (s *HotelService) PlaceOrder(ctx context.Context, req *model.OrderRequest) 
 		return nil, errors.New("cannot place an order with empty items")
 	}
 
-	room, err := s.dbRepo.GetRoomByNumber(ctx, req.RoomNumber)
+	session, err := s.dbRepo.GetGuestSessionByToken(ctx, req.RoomToken)
 	if err != nil {
-		return nil, fmt.Errorf("invalid room number: %w", err)
+		return nil, fmt.Errorf("invalid guest session: %w", err)
+	}
+
+	if session.Status != "active" || time.Now().After(session.ExpiresAt) {
+		return nil, errors.New("session_expired_cannot_order")
+	}
+
+	// Refresh sliding window on active ordering
+	_ = s.dbRepo.ExtendGuestSession(ctx, session.ID, time.Now().Add(12*time.Hour))
+
+	room, err := s.dbRepo.GetRoomByID(ctx, session.RoomID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load room: %w", err)
+	}
+
+	services, err := s.dbRepo.GetPropertyServices(ctx, room.PropertyID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch property services: %w", err)
+	}
+
+	activeServices := make(map[string]bool)
+	for _, srv := range services {
+		if srv.IsEnabled {
+			activeServices[srv.ServiceType] = true
+		}
 	}
 
 	var totalAmount float64
@@ -162,6 +245,10 @@ func (s *HotelService) PlaceOrder(ctx context.Context, req *model.OrderRequest) 
 			return nil, fmt.Errorf("item '%s' belongs to a different property", catalogItem.Name)
 		}
 
+		if !activeServices[catalogItem.ServiceType] {
+			return nil, fmt.Errorf("service module '%s' is currently disabled by hotel administration", catalogItem.ServiceType)
+		}
+
 		itemTotal := catalogItem.Price * float64(reqItem.Quantity)
 		totalAmount += itemTotal
 
@@ -171,13 +258,17 @@ func (s *HotelService) PlaceOrder(ctx context.Context, req *model.OrderRequest) 
 			ServiceType:   catalogItem.ServiceType,
 			Quantity:      reqItem.Quantity,
 			Price:         catalogItem.Price,
-			Attributes:    reqItem.Attributes, // Pass JSONB attributes down
+			Attributes:    reqItem.Attributes,
 		})
 	}
 
 	order := &model.Order{
 		RoomID:      room.ID,
 		RoomNumber:  room.RoomNumber,
+		PropertyID:  room.PropertyID,
+		QRToken:     room.QRToken,
+		SessionID:   session.ID,
+		GroupID:     req.GroupID,
 		TotalAmount: totalAmount,
 		Items:       orderItems,
 	}
@@ -197,8 +288,16 @@ func (s *HotelService) GetActiveOrders(ctx context.Context, propID string) ([]mo
 	return s.dbRepo.GetOrdersByProperty(ctx, propID)
 }
 
-func (s *HotelService) GetClientOrders(ctx context.Context, roomNumber string) ([]model.Order, error) {
-	return s.dbRepo.GetActiveOrdersByRoom(ctx, roomNumber)
+func (s *HotelService) GetClientOrders(ctx context.Context, sessionToken string, all bool) ([]model.Order, error) {
+	session, err := s.dbRepo.GetGuestSessionByToken(ctx, sessionToken)
+	if err != nil {
+		return nil, fmt.Errorf("invalid guest session: %w", err)
+	}
+
+	if all {
+		return s.dbRepo.GetOrdersBySessionID(ctx, session.ID)
+	}
+	return s.dbRepo.GetActiveOrdersBySessionID(ctx, session.ID)
 }
 
 func (s *HotelService) UpdateOrderStatus(ctx context.Context, orderID string, status model.OrderStatus) (*model.Order, error) {
@@ -317,4 +416,25 @@ func (s *HotelService) DeleteCatalogItem(ctx context.Context, itemID, propID str
 	}
 
 	return nil
+}
+
+func (s *HotelService) GetRooms(ctx context.Context, propertyID string) ([]model.Room, error) {
+	return s.dbRepo.GetRoomsByProperty(ctx, propertyID)
+}
+
+func (s *HotelService) RotateRoomToken(ctx context.Context, roomID string, propertyID string) (string, error) {
+	newToken := uuid.New().String()
+	if err := s.dbRepo.UpdateRoomQRToken(ctx, roomID, propertyID, newToken); err != nil {
+		return "", err
+	}
+
+	// Publish dynamic room_updated event so any guest browser on the old token can reload and fail
+	eventPayload := map[string]interface{}{
+		"property_id": propertyID,
+		"room_id":     roomID,
+		"action":      "token_rotated",
+	}
+	_ = s.redisRepo.PublishOrderEvent(ctx, "room_updated", eventPayload)
+
+	return newToken, nil
 }
