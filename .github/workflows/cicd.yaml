@@ -51,9 +51,6 @@ steps:
       docker build -t $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG -t $ECR_REGISTRY/$FRONTEND_REPO:latest .
       docker push $ECR_REGISTRY/$FRONTEND_REPO --all-tags
 
-  # ----------------------------------------------------
-  # Phase 2: The Continuous Deployment (CD) Triggers!
-  # ----------------------------------------------------
   - name: Force new ECS deployment for Backend
     run: |
       aws ecs update-service --cluster $ECS_CLUSTER --service $BACKEND_SERVICE --force-new-deployment
