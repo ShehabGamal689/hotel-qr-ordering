@@ -1,0 +1,63 @@
+name: Build and Push to AWS ECR
+
+on:
+push:
+branches:
+- main
+
+env:
+AWS_REGION: us-east-1
+BACKEND_REPO: hotel-qr-backend
+FRONTEND_REPO: hotel-qr-frontend
+ECS_CLUSTER: hotel-qr-cluster
+BACKEND_SERVICE: hotel-qr-backend-svc
+FRONTEND_SERVICE: hotel-qr-frontend-svc
+
+jobs:
+build-and-push:
+name: Build & Push Docker Images
+runs-on: ubuntu-latest
+
+steps:
+  - name: Checkout Repository
+    uses: actions/checkout@v4
+
+  - name: Configure AWS credentials
+    uses: aws-actions/configure-aws-credentials@v4
+    with:
+      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      aws-region: ${{ env.AWS_REGION }}
+
+  - name: Login to Amazon ECR
+    id: login-ecr
+    uses: aws-actions/amazon-ecr-login@v2
+
+  - name: Build, tag, and push Backend Image
+    env:
+      ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      IMAGE_TAG: ${{ github.sha }}
+    run: |
+      cd backend
+      docker build -t $ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG -t $ECR_REGISTRY/$BACKEND_REPO:latest .
+      docker push $ECR_REGISTRY/$BACKEND_REPO --all-tags
+
+  - name: Build, tag, and push Frontend Image
+    env:
+      ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+      IMAGE_TAG: ${{ github.sha }}
+    run: |
+      cd frontend
+      docker build -t $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG -t $ECR_REGISTRY/$FRONTEND_REPO:latest .
+      docker push $ECR_REGISTRY/$FRONTEND_REPO --all-tags
+
+  # ----------------------------------------------------
+  # Phase 2: The Continuous Deployment (CD) Triggers!
+  # ----------------------------------------------------
+  - name: Force new ECS deployment for Backend
+    run: |
+      aws ecs update-service --cluster $ECS_CLUSTER --service $BACKEND_SERVICE --force-new-deployment
+
+  - name: Force new ECS deployment for Frontend
+    run: |
+      aws ecs update-service --cluster $ECS_CLUSTER --service $FRONTEND_SERVICE --force-new-deployment
