@@ -1,45 +1,32 @@
-# --- Build Stage ---
-FROM golang:1.25-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
-# Install system dependencies (git, gcc, and musl-dev for CGO compilation)
-RUN apk add --no-cache git gcc musl-dev
-
-# Set working directory inside container
 WORKDIR /app
 
-# Copy dependency files and fetch modules
-COPY go.mod ./
+RUN apk add --no-cache git ca-certificates
+
+COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the rest of the application code
+Copy the actual application code
+
 COPY . .
 
-# Compile a statically linked Go binary with CGO enabled for native resolver support
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o /hotel-server ./cmd/server/main.go
-
-# --- Final Runner Stage ---
-FROM alpine:3.20
-
-# Install base runtime utilities (ca-certificates and timezone data)
-RUN apk add --no-cache ca-certificates tzdata
-
-# Set working directory
-WORKDIR /app
-
-# Copy binary from builder stage
-COPY --from=builder /hotel-server ./hotel-server
-
-# Copy database migrations/seed scripts
-COPY --from=builder /app/db ./db
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o hotel-backend .
 
 
 
-# Set production environment flags
-ENV GIN_MODE=release
-ENV PORT=8080
+FROM alpine:latest
 
-# Expose server port
+WORKDIR /root/
+
+Add certificates to make secure HTTPS requests to Stripe/AWS/etc
+
+RUN apk --no-cache add ca-certificates tzdata
+
+Copy the binary from the builder stage
+
+COPY --from=builder /app/hotel-backend .
+
 EXPOSE 8080
 
-# Execute server binary
-CMD ["./hotel-server"]
+CMD ["./hotel-backend"]
