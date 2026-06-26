@@ -19,6 +19,8 @@ RUN apk --no-cache add ca-certificates tzdata
 
 COPY --from=builder /app/hotel-backend .
 
+COPY --from=builder /app/db ./db
+
 EXPOSE 8080
 
 CMD ["./hotel-backend"]
