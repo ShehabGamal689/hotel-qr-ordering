@@ -45,7 +45,34 @@ func main() {
 	defaultRedisURL := redisHost + ":" + redisPort
 	redisURL := getEnv("REDIS_URL", defaultRedisURL)
 
+	migrationsDir := getEnv("MIGRATIONS_DIR", "./db")// 1. Load Configurations from Env with defaults
+	port := getEnv("PORT", "8080")
+
+	// --- Database Configuration ---
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbUser := getEnv("DB_USER", "hoteladmin")
+	dbPassword := getEnv("DB_PASSWORD", "postgres")
+	dbName := getEnv("DB_NAME", "hotelqrdb")
+
+	// SMART SSL: Require SSL in AWS, Disable it for local development
+	sslMode := "require"
+	if dbHost == "localhost" || dbHost == "127.0.0.1" {
+		sslMode = "disable"
+	}
+
+	// Construct the final connection string
+	defaultDbURL := "postgres://" + dbUser + ":" + dbPassword + "@" + dbHost + ":5432/" + dbName + "?sslmode=" + sslMode
+	dbURL := getEnv("DATABASE_URL", defaultDbURL)
+
+	// --- Redis Configuration ---
+	redisHost := getEnv("REDIS_HOST", "localhost")
+	redisPort := getEnv("REDIS_PORT", "6379")
+	
+	defaultRedisURL := redisHost + ":" + redisPort
+	redisURL := getEnv("REDIS_URL", defaultRedisURL)
+
 	migrationsDir := getEnv("MIGRATIONS_DIR", "./db")
+	
 	// 2. Set up Root Context
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
