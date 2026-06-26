@@ -31,15 +31,14 @@ func main() {
 
 	// --- Database Configuration ---
 	dbHost := getEnv("DB_HOST", "localhost")
-	dbUser := getEnv("DB_USER", "postgres")
-	dbPassword := getEnv("DB_PASSWORD", "postgres")
-	dbName := getEnv("DB_NAME", "hotel_ordering")
+	dbUser := getEnv("DB_USER", "hoteladmin")     // Matches Terraform default
+	dbName := getEnv("DB_NAME", "hotelqrdb")       // Matches Terraform default
+	dbPassword := getEnv("DB_PASSWORD", "postgres") // Will read the newly added Terraform env var
 
 	defaultDbURL := "postgres://" + dbUser + ":" + dbPassword + "@" + dbHost + ":5432/" + dbName + "?sslmode=disable"
 	dbURL := getEnv("DATABASE_URL", defaultDbURL)
 
 	// --- Redis Configuration ---
-	// Fetch individual Redis variables injected by AWS ECS
 	redisHost := getEnv("REDIS_HOST", "localhost")
 	redisPort := getEnv("REDIS_PORT", "6379")
 	
@@ -47,7 +46,6 @@ func main() {
 	redisURL := getEnv("REDIS_URL", defaultRedisURL)
 
 	migrationsDir := getEnv("MIGRATIONS_DIR", "./db")
-
 	// 2. Set up Root Context
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
