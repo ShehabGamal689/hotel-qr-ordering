@@ -54,9 +54,6 @@ func main() {
 
 	migrationsDir := getEnv("MIGRATIONS_DIR", "./db")
 
-	// 2. Set up Root Context
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	
 	// 2. Set up Root Context
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
