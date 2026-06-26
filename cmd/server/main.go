@@ -166,6 +166,11 @@ func main() {
 	r.GET("/", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy", "message": "Hotel QR API is running"})
 	})
+
+	// Health Check for AWS ALB
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "healthy", "message": "Backend is alive!"})
+	})
 	
 	r.GET("/guest", func(c *gin.Context) {
 		token := c.DefaultQuery("token", "token_101_grand")
