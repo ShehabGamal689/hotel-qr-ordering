@@ -164,9 +164,9 @@ func main() {
 
 	// Redirect root & guest to Next.js Frontend Order Page (using default seed token)
 	r.GET("/", func(c *gin.Context) {
-		c.Redirect(http.StatusFound, "http://localhost:3000/order?token=token_101_grand")
+		c.JSON(http.StatusOK, gin.H{"status": "healthy", "message": "Hotel QR API is running"})
 	})
-
+	
 	r.GET("/guest", func(c *gin.Context) {
 		token := c.DefaultQuery("token", "token_101_grand")
 		c.Redirect(http.StatusFound, "http://localhost:3000/order?token="+token)
