@@ -37,14 +37,18 @@ func main() {
 	dbName := getEnv("DB_NAME", "hotelqrdb")
 
 	// SMART SSL: Require SSL in AWS, Disable it for local development
+	// SMART SSL: Require SSL in AWS, Disable it for local development
 	sslMode := "require"
 	if dbHost == "localhost" || dbHost == "127.0.0.1" {
 		sslMode = "disable"
 	}
 
-	// FORCE the connection string using individual variables. 
-	// This prevents local .env files from overriding AWS ECS variables!
+	// ADD THIS LINE TO DEBUG:
+	log.Printf("Attempting DB connection as user '%s' with password length: %d", dbUser, len(dbPassword))
+
+	// FORCE the connection string
 	dbURL := "postgres://" + dbUser + ":" + dbPassword + "@" + dbHost + ":5432/" + dbName + "?sslmode=" + sslMode
+
 	
 	// --- Redis Configuration ---
 	redisHost := getEnv("REDIS_HOST", "localhost")
