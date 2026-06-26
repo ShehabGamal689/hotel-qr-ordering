@@ -30,6 +30,7 @@ func main() {
 	port := getEnv("PORT", "8080")
 
 	// --- Database Configuration ---
+	// --- Database Configuration ---
 	dbHost := getEnv("DB_HOST", "localhost")
 	dbUser := getEnv("DB_USER", "hoteladmin")
 	dbPassword := getEnv("DB_PASSWORD", "postgres")
@@ -41,10 +42,10 @@ func main() {
 		sslMode = "disable"
 	}
 
-	// Construct the final connection string
-	defaultDbURL := "postgres://" + dbUser + ":" + dbPassword + "@" + dbHost + ":5432/" + dbName + "?sslmode=" + sslMode
-	dbURL := getEnv("DATABASE_URL", defaultDbURL)
-
+	// FORCE the connection string using individual variables. 
+	// This prevents local .env files from overriding AWS ECS variables!
+	dbURL := "postgres://" + dbUser + ":" + dbPassword + "@" + dbHost + ":5432/" + dbName + "?sslmode=" + sslMode
+	
 	// --- Redis Configuration ---
 	redisHost := getEnv("REDIS_HOST", "localhost")
 	redisPort := getEnv("REDIS_PORT", "6379")
