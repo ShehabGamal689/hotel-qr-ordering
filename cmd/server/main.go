@@ -28,22 +28,24 @@ func main() {
 
 	// 1. Load Configurations from Env with defaults
 	port := getEnv("PORT", "8080")
-	dbURL := getEnv("DATABASE_URL", "postgres://postgres:postgres@localhost:5432/hotel_ordering?sslmode=disable")
-	redisURL := getEnv("REDIS_URL", "localhost:6379")
-	migrationsDir := getEnv("MIGRATIONS_DIR", "./db")// 1. Load Configurations from Env with defaults
-	port := getEnv("PORT", "8080")
 
-	// Fetch individual DB variables injected by AWS ECS, falling back to local defaults
+	// --- Database Configuration ---
 	dbHost := getEnv("DB_HOST", "localhost")
 	dbUser := getEnv("DB_USER", "postgres")
 	dbPassword := getEnv("DB_PASSWORD", "postgres")
 	dbName := getEnv("DB_NAME", "hotel_ordering")
 
-	// Construct the final connection string
 	defaultDbURL := "postgres://" + dbUser + ":" + dbPassword + "@" + dbHost + ":5432/" + dbName + "?sslmode=disable"
 	dbURL := getEnv("DATABASE_URL", defaultDbURL)
 
-	redisURL := getEnv("REDIS_URL", "localhost:6379")
+	// --- Redis Configuration ---
+	// Fetch individual Redis variables injected by AWS ECS
+	redisHost := getEnv("REDIS_HOST", "localhost")
+	redisPort := getEnv("REDIS_PORT", "6379")
+	
+	defaultRedisURL := redisHost + ":" + redisPort
+	redisURL := getEnv("REDIS_URL", defaultRedisURL)
+
 	migrationsDir := getEnv("MIGRATIONS_DIR", "./db")
 
 	// 2. Set up Root Context
