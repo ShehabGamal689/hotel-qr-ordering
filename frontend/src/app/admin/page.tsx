@@ -915,6 +915,8 @@ function RoomsView({ token }: { token: string }) {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null);
+  const [checkingOut, setCheckingOut] = useState<string | null>(null);
+  const [showQRGallery, setShowQRGallery] = useState(false);
 
   const fetchRooms = async () => {
     try {
@@ -943,6 +945,59 @@ function RoomsView({ token }: { token: string }) {
     alert('Copied to clipboard!');
   };
 
+  const handleCheckout = async (room: Room) => {
+    if (!confirm(`Check out guest from Room ${room.room_number}?\n\nThis will end their active session immediately.`)) return;
+    setCheckingOut(room.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/admin/rooms/${room.id}/checkout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!res.ok) throw new Error('Checkout failed');
+      alert(`Room ${room.room_number} checked out successfully.`);
+    } catch {
+      alert('Error checking out room. Please try again.');
+    } finally {
+      setCheckingOut(null);
+    }
+  };
+
+  const handlePrintAllQRs = () => {
+    const win = window.open('', '_blank');
+    if (!win) { alert('Pop-up blocked. Please allow pop-ups for this page.'); return; }
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <title>QR Codes — All Rooms</title>
+  <style>
+    body { font-family: Georgia, serif; background: #fff; margin: 0; padding: 24px; }
+    h1 { font-size: 20px; margin-bottom: 20px; text-align: center; color: #333; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .card { text-align: center; border: 1px solid #ddd; padding: 20px 16px 16px; border-radius: 10px; page-break-inside: avoid; }
+    .card h3 { margin: 0 0 4px; font-size: 17px; color: #111; }
+    .card p { margin: 0 0 12px; font-size: 11px; color: #888; }
+    img { width: 160px; height: 160px; display: block; margin: 0 auto; }
+    .print-btn { display: block; margin: 0 auto 24px; padding: 10px 28px; background: #c9a84c; color: #fff; border: none; border-radius: 8px; font-size: 14px; font-weight: bold; cursor: pointer; }
+    @media print { .print-btn { display: none; } body { padding: 8px; } }
+  </style>
+</head>
+<body>
+  <button class="print-btn" onclick="window.print()">🖨️ Print All QR Codes</button>
+  <h1>Room QR Codes</h1>
+  <div class="grid">
+    ${rooms.map(room => `
+    <div class="card">
+      <h3>Room ${room.room_number}</h3>
+      <p>Scan to access hotel services</p>
+      <img src="${API_BASE}/api/v1/admin/rooms/${room.id}/qr?token=${token}" alt="Room ${room.room_number} QR" />
+    </div>`).join('')}
+  </div>
+</body>
+</html>`;
+    win.document.write(html);
+    win.document.close();
+  };
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center p-12 bg-obsidian-950">
@@ -957,6 +1012,20 @@ function RoomsView({ token }: { token: string }) {
         <div>
           <h2 className="text-3xl font-serif text-zinc-100 font-bold tracking-tight">Rooms & QR Codes</h2>
           <p className="text-sm text-zinc-400 mt-1">Manage guest rooms and download printable QR code menus.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowQRGallery(true)}
+            className="bg-gold-500 hover:bg-gold-400 text-obsidian-950 font-bold py-2.5 px-5 rounded-xl text-sm transition-all duration-200 flex items-center gap-2 shadow-md shadow-gold-500/10"
+          >
+            📱 Generate All QRs
+          </button>
+          <button
+            onClick={handlePrintAllQRs}
+            className="bg-obsidian-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 font-semibold py-2.5 px-5 rounded-xl text-sm transition-all duration-200 flex items-center gap-2"
+          >
+            🖨️ Print All
+          </button>
         </div>
       </div>
 
@@ -987,17 +1056,93 @@ function RoomsView({ token }: { token: string }) {
               </div>
             </div>
 
-            <div className="mt-6 pt-4 border-t border-zinc-800/40">
-              <button 
-                onClick={() => setSelectedRoom(room)} 
+            <div className="mt-6 pt-4 border-t border-zinc-800/40 flex flex-col gap-2">
+              <button
+                onClick={() => setSelectedRoom(room)}
                 className="w-full bg-zinc-800 hover:bg-gold-500 hover:text-obsidian-950 text-zinc-100 font-semibold py-2.5 px-4 rounded-xl text-xs transition-all duration-200"
               >
                 View QR Code
+              </button>
+              <button
+                onClick={() => handleCheckout(room)}
+                disabled={checkingOut === room.id}
+                className="w-full bg-red-950/30 hover:bg-red-900/40 border border-red-500/20 text-red-400 font-semibold py-2.5 px-4 rounded-xl text-xs transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {checkingOut === room.id ? 'Checking out...' : '🚪 Checkout Guest'}
               </button>
             </div>
           </div>
         ))}
       </div>
+
+      {/* QR Gallery — all rooms */}
+      {showQRGallery && (
+        <div className="fixed inset-0 bg-obsidian-950/95 backdrop-blur-sm z-50 overflow-y-auto">
+          <div className="max-w-6xl mx-auto p-8">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-8 sticky top-0 bg-obsidian-950/90 backdrop-blur-md py-4 -mx-8 px-8 border-b border-zinc-800/60">
+              <div>
+                <h2 className="text-2xl font-serif font-bold text-zinc-100">All Room QR Codes</h2>
+                <p className="text-sm text-zinc-500 mt-0.5">{rooms.length} rooms — scan from screen or download individually</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handlePrintAllQRs}
+                  className="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 font-semibold py-2 px-4 rounded-xl text-sm transition-all flex items-center gap-2"
+                >
+                  🖨️ Print All
+                </button>
+                <button
+                  onClick={() => setShowQRGallery(false)}
+                  className="bg-red-950/30 hover:bg-red-900/40 border border-red-500/20 text-red-400 font-semibold py-2 px-4 rounded-xl text-sm transition-all"
+                >
+                  ✕ Close
+                </button>
+              </div>
+            </div>
+
+            {/* Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+              {rooms.map(room => (
+                <div key={room.id} className="bg-obsidian-900 border border-zinc-800/40 rounded-2xl p-6 flex flex-col items-center gap-4 hover:border-gold-500/20 transition-all">
+                  <div className="flex items-center justify-between w-full">
+                    <h3 className="font-serif text-lg font-bold text-zinc-100">Room {room.room_number}</h3>
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Active</span>
+                  </div>
+
+                  {/* QR Code — large enough to scan from screen */}
+                  <div className="bg-white p-3 rounded-xl shadow-inner border border-zinc-200 w-full">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`${API_BASE}/api/v1/admin/rooms/${room.id}/qr?token=${token}`}
+                      alt={`Room ${room.room_number} QR Code`}
+                      className="w-full h-auto block"
+                    />
+                  </div>
+
+                  <div className="w-full space-y-2">
+                    <a
+                      href={`${API_BASE}/api/v1/admin/rooms/${room.id}/qr?token=${token}`}
+                      download={`room_${room.room_number}_qr.png`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-full bg-gold-500 hover:bg-gold-400 text-obsidian-950 font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 transition-all"
+                    >
+                      📥 Download PNG
+                    </a>
+                    <button
+                      onClick={() => { setShowQRGallery(false); setSelectedRoom(room); }}
+                      className="w-full bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold py-2 rounded-xl text-xs transition-all"
+                    >
+                      🔍 View Full Screen
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedRoom && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
