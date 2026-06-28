@@ -517,6 +517,20 @@ func (r *PostgresRepository) UpdateGuestSessionStatus(ctx context.Context, sessi
 	return err
 }
 
+func (r *PostgresRepository) GetActiveGuestSessionForRoom(ctx context.Context, roomID string) (*model.GuestSession, error) {
+	query := `
+		SELECT id, room_id, session_token, status, created_at, expires_at
+		FROM guest_sessions
+		WHERE room_id = $1 AND status = 'active' AND expires_at > NOW()
+		ORDER BY created_at DESC LIMIT 1`
+	var s model.GuestSession
+	err := r.Pool.QueryRow(ctx, query, roomID).Scan(&s.ID, &s.RoomID, &s.SessionToken, &s.Status, &s.CreatedAt, &s.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 func (r *PostgresRepository) GetActiveOrdersBySessionID(ctx context.Context, sessionID string) ([]model.Order, error) {
 	orderQuery := `
 		SELECT o.id, o.room_id, r.room_number, r.property_id, o.qr_token, COALESCE(o.session_id::text, ''), o.group_id, o.status, o.total_amount, o.created_at 

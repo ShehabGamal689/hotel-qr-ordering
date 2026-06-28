@@ -94,17 +94,17 @@ func (s *HotelService) NegotiateGuestSession(ctx context.Context, roomStaticToke
 		return "", fmt.Errorf("invalid room static token: %w", err)
 	}
 
+	// If the caller has a known session token, try to honor it first.
 	if oldGuestToken != "" {
 		session, err := s.dbRepo.GetGuestSessionByToken(ctx, oldGuestToken)
 		if err == nil && session.RoomID == room.ID {
 			switch session.Status {
 			case "active":
-				// Extend the session's sliding inactivity window (12 hours)
 				newExpiry := time.Now().Add(12 * time.Hour)
 				_ = s.dbRepo.ExtendGuestSession(ctx, session.ID, newExpiry)
 				return oldGuestToken, nil
 			case "archived":
-				// Allow returning the archived session token for read-only history if it expired/was archived recently (within 48 hours)
+				// Read-only checkout screen for up to 48 hours after archive
 				if time.Now().Before(session.ExpiresAt.Add(48 * time.Hour)) {
 					return oldGuestToken, nil
 				}
@@ -112,20 +112,45 @@ func (s *HotelService) NegotiateGuestSession(ctx context.Context, roomStaticToke
 		}
 	}
 
-	// If no valid active session or it was archived/not found, start a new stay
-	// 1. Invalidate all previous active sessions for this room
-	_ = s.dbRepo.InvalidateAllGuestSessionsForRoom(ctx, room.ID)
+	// No valid token from this browser — check if another device has an active session
+	// for this room (same guest, second device). Join it instead of creating a new one.
+	existingSession, err := s.dbRepo.GetActiveGuestSessionForRoom(ctx, room.ID)
+	if err == nil && existingSession != nil {
+		return existingSession.SessionToken, nil
+	}
 
-	// 2. Generate a new stay token
+	// Truly no active session → new guest check-in.
+	_ = s.dbRepo.InvalidateAllGuestSessionsForRoom(ctx, room.ID)
 	newToken := uuid.New().String()
 	expiresAt := time.Now().Add(12 * time.Hour)
-
 	_, err = s.dbRepo.CreateGuestSession(ctx, room.ID, newToken, expiresAt)
 	if err != nil {
 		return "", fmt.Errorf("failed to create guest session: %w", err)
 	}
-
 	return newToken, nil
+}
+
+func (s *HotelService) CheckoutRoom(ctx context.Context, roomID, propertyID string) error {
+	room, err := s.dbRepo.GetRoomByID(ctx, roomID)
+	if err != nil {
+		return fmt.Errorf("room not found: %w", err)
+	}
+	if room.PropertyID != propertyID {
+		return fmt.Errorf("room does not belong to this property")
+	}
+
+	if err := s.dbRepo.InvalidateAllGuestSessionsForRoom(ctx, roomID); err != nil {
+		return fmt.Errorf("failed to checkout room: %w", err)
+	}
+
+	eventPayload := map[string]interface{}{
+		"property_id": propertyID,
+		"room_id":     roomID,
+		"room_number": room.RoomNumber,
+		"action":      "guest_checked_out",
+	}
+	_ = s.redisRepo.PublishOrderEvent(ctx, "room_updated", eventPayload)
+	return nil
 }
 
 // --- Client Bootstrap & Catalog ---
