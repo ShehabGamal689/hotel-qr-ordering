@@ -1,14 +1,15 @@
 #!/bin/bash
 
-# Detect primary active LAN IP (excluding docker interfaces, loopbacks, etc.)
-DETECTED_IP=$(hostname -I | awk '{print $1}')
-
-if [ -z "$DETECTED_IP" ]; then
-  echo "[WARNING] No active LAN IP detected. Falling back to localhost."
-  export HOST_IP="localhost"
+# Use the stable mDNS (.local) hostname so QR codes never depend on a floating LAN IP.
+# Guests on the same Wi-Fi resolve this name via mDNS/Avahi regardless of the laptop's
+# current IP address -- it survives DHCP reassignment AND switching Wi-Fi networks.
+# Override by exporting HOST_IP (e.g. a public domain) before running this script.
+if [ -z "$HOST_IP" ]; then
+  export HOST_IP="$(hostname).local"
+  echo "[SUCCESS] Using stable mDNS hostname: $HOST_IP"
+  echo "[INFO] IP-independent: survives DHCP changes and switching Wi-Fi networks."
 else
-  echo "[SUCCESS] Detected active LAN IP: $DETECTED_IP"
-  export HOST_IP="$DETECTED_IP"
+  echo "[INFO] Using predefined HOST_IP: $HOST_IP"
 fi
 
 # Stop any currently running containers to avoid conflicts
