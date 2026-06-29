@@ -1,29 +1,58 @@
-name: Build and Push to AWS ECR
+name: Master Cloud Deployment
 
 on:
   push:
     branches:
-      - main
-  workflow_dispatch:
-  
+      - main 
+   workflow_dispatch:
+
+concurrency: 
+  group: production
+  cancel-in-progress: false
+
 env:
   AWS_REGION: us-east-1
-  BACKEND_REPO: hotel-qr-backend
-  FRONTEND_REPO: hotel-qr-frontend
-  ECS_CLUSTER: hotel-qr-cluster
-  BACKEND_SERVICE: hotel-qr-backend-svc
-  FRONTEND_SERVICE: hotel-qr-frontend-svc
 
 jobs:
+  terraform:
+    name: 'Terraform Apply'
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: ./infra
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+
+
   build-and-push:
-    name: Build & Push Docker Images
+    name: 'Build Docker Images'
+    needs: terraform 
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -37,24 +66,38 @@ jobs:
       - name: Build, tag, and push Backend Image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          ECR_REPOSITORY: hotel-qr-backend
+          IMAGE_TAG: latest
         run: |
-          docker build -t $ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG -t $ECR_REGISTRY/$BACKEND_REPO:latest .
-          docker push $ECR_REGISTRY/$BACKEND_REPO --all-tags
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ./Dockerfile.backend .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
       - name: Build, tag, and push Frontend Image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          ECR_REPOSITORY: hotel-qr-frontend
+          IMAGE_TAG: latest
         run: |
-          cd frontend
-          docker build --build-arg NEXT_PUBLIC_API_URL="https://devopsnawy.qzz.io" -t $ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG -t $ECR_REGISTRY/$FRONTEND_REPO:latest .
-          docker push $ECR_REGISTRY/$FRONTEND_REPO --all-tags
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f ./Dockerfile.frontend .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-      - name: Force new ECS deployment for Backend
-        run: |
-          aws ecs update-service --cluster $ECS_CLUSTER --service $BACKEND_SERVICE --force-new-deployment
+  deploy:
+    name: 'Deploy to ECS'
+    needs: build-and-push 
+    runs-on: ubuntu-latest
 
-      - name: Force new ECS deployment for Frontend
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Force ECS Backend Redeployment
         run: |
-          aws ecs update-service --cluster $ECS_CLUSTER --service $FRONTEND_SERVICE --force-new-deployment
+          aws ecs update-service --cluster hotel-qr-cluster --service hotel-qr-backend --force-new-deployment
+
+      - name: Force ECS Frontend Redeployment
+        run: |
+          aws ecs update-service --cluster hotel-qr-cluster --service hotel-qr-frontend --force-new-deployment
