@@ -5,12 +5,18 @@ on:
     branches:
       - main 
   workflow_dispatch:
+
 concurrency: 
   group: production
   cancel-in-progress: false
 
 env:
   AWS_REGION: us-east-1
+  BACKEND_REPO: hotel-qr-backend
+  FRONTEND_REPO: hotel-qr-frontend
+  ECS_CLUSTER: hotel-qr-cluster
+  BACKEND_SERVICE: hotel-qr-backend
+  FRONTEND_SERVICE: hotel-qr-frontend
 
 jobs:
   terraform:
@@ -40,14 +46,14 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -auto-approve
-
+  
         env: 
           TF_VAR_registrar_api_key: ${{ secrets.DIGITALPLAT_API_KEY }}
 
-
+  
   build-and-push:
     name: Build & Push Docker Images
-    needs: terraform
+    needs: terraform 
     runs-on: ubuntu-latest
 
     steps:
