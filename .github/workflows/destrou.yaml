@@ -1,0 +1,37 @@
+name: Destroy Cloud Infrastructure
+
+on: workflow_dispatch 
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  destroy-infra:
+    name: 'Terraform Destroy'
+    runs-on: ubuntu-latest
+    
+    defaults:
+      run:
+        working-directory: ./infra
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init -upgrade-reconfigure
+
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
+        env:
+          TF_VAR_registrar_api_key: ${{ secrets.DIGITALPLAT_API_KEY }}
