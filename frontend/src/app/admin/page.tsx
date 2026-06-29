@@ -70,32 +70,35 @@ function readCookie(name: string): string | null {
 }
 
 export default function AdminPage() {
-  const [token, setToken] = useState<string | null>(() => readCookie('admin_token'));
-  const [view, setView] = useState<'kanban' | 'config' | 'rooms'>(() => {
-    if (typeof localStorage === 'undefined') return 'kanban';
-    const saved = localStorage.getItem('admin_view');
-    return (saved === 'kanban' || saved === 'config' || saved === 'rooms') ? saved : 'kanban';
-  });
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    if (typeof localStorage === 'undefined') return 'dark';
-    return (localStorage.getItem('theme') as 'dark' | 'light') || 'dark';
-  });
+  // 1. Initialize with strict, safe defaults for the Server
+  const [isMounted, setIsMounted] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+  const [view, setView] = useState<'kanban' | 'config' | 'rooms'>('kanban');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
+  // 2. Hydrate the state ONLY after the client mounts
   useEffect(() => {
-    document.documentElement.classList.toggle('light', theme === 'light');
-  }, [theme]);
+    setToken(readCookie('admin_token'));
+    
+    const savedView = localStorage.getItem('admin_view');
+    if (savedView === 'config' || savedView === 'rooms') setView(savedView);
+    
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'light') setTheme('light');
+    
+    setIsMounted(true); // Signal that it is safe to render the real UI
+  }, []);
 
-  const switchView = (v: 'kanban' | 'config' | 'rooms') => {
-    localStorage.setItem('admin_view', v);
-    setView(v);
-  };
+  // 3. Render a safe fallback to prevent Hydration Mismatch crashes
+  if (!isMounted) {
+    return (
+      <div className="bg-obsidian-950 min-h-screen flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-gold-500 border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
 
-  const toggleTheme = () => {
-    const newTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(newTheme);
-    localStorage.setItem('theme', newTheme);
-  };
-
+  // 4. Handle unauthenticated users
   if (!token) {
     return <AuthView onLogin={(t) => {
       document.cookie = `admin_token=${t}; Max-Age=86400; path=/; SameSite=Strict`;
@@ -103,6 +106,7 @@ export default function AdminPage() {
     }} />;
   }
 
+  // ... rest of the dashboard UI code stays the same
   return (
     <div className="bg-obsidian-950 text-zinc-100 font-sans min-h-screen flex flex-col antialiased selection:bg-gold-500 selection:text-obsidian-950">
       {/* Header */}
