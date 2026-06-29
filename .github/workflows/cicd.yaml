@@ -15,8 +15,8 @@ env:
   BACKEND_REPO: hotel-qr-backend
   FRONTEND_REPO: hotel-qr-frontend
   ECS_CLUSTER: hotel-qr-cluster
-  BACKEND_SERVICE: hotel-qr-backend
-  FRONTEND_SERVICE: hotel-qr-frontend
+  BACKEND_SERVICE: hotel-qr-backend-svc
+  FRONTEND_SERVICE: hotel-qr-frontend-svc
 
 jobs:
   terraform:
