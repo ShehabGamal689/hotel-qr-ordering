@@ -41,6 +41,9 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve
 
+        env: 
+          TF_VAR_registrar_api_key: ${{ secrets.DIGITALPLAT_API_KEY }}
+
 
   build-and-push:
     name: 'Build Docker Images'
