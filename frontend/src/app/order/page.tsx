@@ -13,6 +13,22 @@ if (typeof window !== 'undefined') {
   }
 }
 
+// Storage images are saved with an absolute host baked in (e.g. localhost:9000 or an old LAN IP),
+// so they break for guests on other devices/networks. Rewrite the host to whatever address the
+// guest actually used to reach this page -- mirrors how API_BASE follows window.location above.
+// External images (e.g. Unsplash) have no :9000 port and are left untouched.
+function resolveImageUrl(raw: string): string {
+  if (typeof window === 'undefined') return raw;
+  try {
+    const u = new URL(raw);
+    if (u.port === '9000') {
+      u.hostname = window.location.hostname;
+      return u.toString();
+    }
+  } catch { /* not an absolute URL; leave as-is */ }
+  return raw;
+}
+
 // --- Types ---
 interface CatalogItem {
   id: string;
@@ -114,6 +130,13 @@ function OrderPageContent() {
   const [refetchTrigger, setRefetchTrigger] = useState(0);
 
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'accepted' | 'completed' | 'cancelled' }[]>([]);
+
+  const addToast = (message: string, type: 'accepted' | 'completed' | 'cancelled') => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4500);
+  };
 
   useEffect(() => {
     const saved = localStorage.getItem('theme') || 'dark';
@@ -254,6 +277,10 @@ function OrderPageContent() {
         }
         if (d.is_expired) {
           setIsExpired(true);
+          // Clear the stale archived token so the next scan starts a fresh session
+          if (roomStaticToken) {
+            localStorage.removeItem(`guest_session_${roomStaticToken}`);
+          }
         }
         setLoading(false);
         setTimeout(() => setSplash(false), 1000);
@@ -339,6 +366,23 @@ function OrderPageContent() {
             const updatedOrder = message.payload;
             console.log(`Received order update for Room ${roomNumber}:`, updatedOrder);
             setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+
+            if (updatedOrder.status === 'accepted') {
+              addToast('Your request has been accepted and is being prepared', 'accepted');
+            } else if (updatedOrder.status === 'completed') {
+              addToast('Your request has been fulfilled', 'completed');
+            } else if (updatedOrder.status === 'cancelled') {
+              addToast('A request has been declined by the hotel', 'cancelled');
+            }
+          }
+
+          // 3. Guest checkout — force a bootstrap refresh so the session-ended screen appears
+          if (
+            message.type === 'room_updated' &&
+            message.payload?.action === 'guest_checked_out' &&
+            message.payload?.room_number === roomNumber
+          ) {
+            setRefetchTrigger(prev => prev + 1);
           }
         } catch (err) {
           console.error('Failed to parse WS message:', err);
@@ -578,9 +622,9 @@ function OrderPageContent() {
 
                 {!!item.attributes?.image_url && (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img 
-                    src={item.attributes.image_url as string} 
-                    alt={item.name} 
+                  <img
+                    src={resolveImageUrl(item.attributes.image_url as string)}
+                    alt={item.name}
                     className="w-24 h-24 object-cover rounded-lg flex-shrink-0 border border-zinc-800/40" 
                   />
                 )}
@@ -691,9 +735,12 @@ function OrderPageContent() {
                   <div>
                     <h4 className="font-semibold text-zinc-100 text-sm">{cartItem.item.name}</h4>
                     <p className="text-[10px] text-gold-400/80 font-bold uppercase tracking-wider mt-0.5">{serviceTitles[cartItem.item.service_type] || cartItem.item.service_type}</p>
-                    <div className="text-xs text-zinc-400 mt-1">
-                      Quantity: <span className="font-mono text-zinc-200">{cartItem.quantity}</span>
-                      {cartItem.item.price > 0 && ` • Price: $${(cartItem.item.price * cartItem.quantity).toFixed(2)}`}
+                    <div className="text-xs text-zinc-400 mt-1 flex items-center gap-2">
+                      <span>Quantity: <span className="font-mono text-zinc-200">{cartItem.quantity}</span></span>
+                      {cartItem.item.price > 0
+                        ? <span className="font-mono text-zinc-300">${(cartItem.item.price * cartItem.quantity).toFixed(2)}</span>
+                        : <span className="text-emerald-400 text-[10px] font-bold uppercase tracking-wider">Complimentary</span>
+                      }
                     </div>
                   </div>
                   <button 
@@ -759,6 +806,17 @@ function OrderPageContent() {
             </div>
             
             <div className="space-y-6">
+              {trackerTab === 'active' && activeOrders.length > 1 && activeOrders.reduce((s, o) => s + o.total_amount, 0) > 0 && (
+                <div className="bg-obsidian-900 border border-gold-500/20 rounded-2xl px-5 py-4 flex justify-between items-center">
+                  <div>
+                    <span className="text-xs text-zinc-500 uppercase tracking-widest font-bold">Grand Total</span>
+                    <p className="text-[10px] text-zinc-600 mt-0.5">{activeOrders.length} active requests</p>
+                  </div>
+                  <span className="text-xl font-bold font-serif text-gold-400">
+                    ${activeOrders.reduce((s, o) => s + o.total_amount, 0).toFixed(2)}
+                  </span>
+                </div>
+              )}
               {trackerTab === 'active' ? (
                 activeOrders.length > 0 ? (
                   activeOrders.map(order => (
@@ -771,7 +829,10 @@ function OrderPageContent() {
                         {order.items?.map((item: OrderItem) => (
                           <div key={item.id} className="flex justify-between text-sm text-zinc-300">
                             <span>{item.item_name} <span className="text-zinc-555">x{item.quantity}</span></span>
-                            {item.price > 0 && <span className="font-mono">${(item.price * item.quantity).toFixed(2)}</span>}
+                            {item.price > 0
+                              ? <span className="font-mono">${(item.price * item.quantity).toFixed(2)}</span>
+                              : <span className="text-emerald-400 text-[10px] font-bold uppercase tracking-wider self-center">Complimentary</span>
+                            }
                           </div>
                         ))}
                       </div>
@@ -806,7 +867,10 @@ function OrderPageContent() {
                         {order.items?.map((item: OrderItem) => (
                           <div key={item.id} className="flex justify-between text-sm text-zinc-400">
                             <span>{item.item_name} <span className="text-zinc-555">x{item.quantity}</span></span>
-                            {item.price > 0 && <span className="font-mono">${(item.price * item.quantity).toFixed(2)}</span>}
+                            {item.price > 0
+                              ? <span className="font-mono">${(item.price * item.quantity).toFixed(2)}</span>
+                              : <span className="text-emerald-400/70 text-[10px] font-bold uppercase tracking-wider self-center">Complimentary</span>
+                            }
                           </div>
                         ))}
                       </div>
@@ -833,6 +897,23 @@ function OrderPageContent() {
           </div>
         </div>
       )}
+
+      {/* Toast Notifications */}
+      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 w-[90%] max-w-sm z-[60] flex flex-col gap-2 pointer-events-none">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`px-4 py-3 rounded-xl text-sm font-semibold shadow-2xl animate-fade-in-up flex items-center gap-2 ${
+              toast.type === 'accepted' ? 'bg-gold-500 text-obsidian-950' :
+              toast.type === 'completed' ? 'bg-emerald-500 text-white' :
+              'bg-red-500 text-white'
+            }`}
+          >
+            <span>{toast.type === 'accepted' ? '✅' : toast.type === 'completed' ? '🎉' : '❌'}</span>
+            <span>{toast.message}</span>
+          </div>
+        ))}
+      </div>
 
       {/* CSS Animations */}
       <style dangerouslySetInnerHTML={{__html: `

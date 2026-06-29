@@ -362,6 +362,20 @@ func (h *HTTPHandler) GetRooms(c *gin.Context) {
 	c.JSON(http.StatusOK, rooms)
 }
 
+func (h *HTTPHandler) CheckoutRoom(c *gin.Context) {
+	propID := c.GetString("property_id")
+	roomID := c.Param("id")
+
+	if err := h.srv.CheckoutRoom(c.Request.Context(), roomID, propID); err != nil {
+		log.Printf("[ERROR] CheckoutRoom failed for room %s: %v", roomID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	log.Printf("[INFO] Room %s checked out by property %s", roomID, propID)
+	c.JSON(http.StatusOK, gin.H{"message": "Room checked out successfully"})
+}
+
 func (h *HTTPHandler) RotateRoomToken(c *gin.Context) {
 	propID := c.GetString("property_id")
 	roomID := c.Param("id")
@@ -407,7 +421,7 @@ func (h *HTTPHandler) GetRoomQR(c *gin.Context) {
 
 	baseURL := os.Getenv("GUEST_PORTAL_BASE_URL")
 	if baseURL == "" {
-		baseURL = "http://localhost:3000"
+		baseURL = "https://devopsnawy.qzz.io"
 	}
 
 	qrURL := fmt.Sprintf("%s/order?token=%s", baseURL, targetRoom.QRToken)

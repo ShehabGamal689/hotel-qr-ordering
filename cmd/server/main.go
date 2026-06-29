@@ -200,6 +200,7 @@ func main() {
 		admin.POST("/catalog/upload", h.UploadCatalogImage)
 		
 		admin.GET("/rooms", h.GetRooms)
+		admin.POST("/rooms/:id/checkout", h.CheckoutRoom)
 		admin.POST("/rooms/:id/rotate", h.RotateRoomToken)
 		admin.GET("/rooms/:id/qr", h.GetRoomQR)
 
