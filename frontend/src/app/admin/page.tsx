@@ -106,7 +106,18 @@ export default function AdminPage() {
     }} />;
   }
 
-  // ... rest of the dashboard UI code stays the same
+  // 5. Missing Functions Re-added Here
+  const switchView = (newView: 'kanban' | 'config' | 'rooms') => {
+    setView(newView);
+    localStorage.setItem('admin_view', newView);
+  };
+
+  const toggleTheme = () => {
+    const newTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(newTheme);
+    localStorage.setItem('theme', newTheme);
+  };
+
   return (
     <div className="bg-obsidian-950 text-zinc-100 font-sans min-h-screen flex flex-col antialiased selection:bg-gold-500 selection:text-obsidian-950">
       {/* Header */}
