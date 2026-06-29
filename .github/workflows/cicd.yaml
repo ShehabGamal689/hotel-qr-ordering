@@ -42,7 +42,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -upgrade-reconfigure
 
       - name: Terraform Apply
         run: terraform apply -auto-approve
